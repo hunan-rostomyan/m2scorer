@@ -28,15 +28,58 @@
 #   --max_unchanged_words N     -  Maximum unchanged words when extracting edits. Default 2."
 #   --beta B                    -  Beta value for F-measure. Default 0.5."
 #   --ignore_whitespace_casing  -  Ignore edits that only affect whitespace and caseing. Default no."
-#   --error_type <ERRORTYPE>	-  Score only one particular error type e.g. ArtorDet, Mec, Wform, Wci
 #
 
 import sys
-from scorer import levenshtein
+import levenshtein
 from getopt import getopt
-from scorer.util import paragraphs
-from scorer.util import smart_open
-from scorer.reader import load_annotation
+from util import paragraphs
+from util import smart_open
+
+
+
+def load_annotation(gold_file):
+    source_sentences = []
+    gold_edits = []
+    fgold = smart_open(gold_file, 'r')
+    puffer = fgold.read()
+    fgold.close()
+    puffer = puffer.decode('utf8')
+    for item in paragraphs(puffer.splitlines(True)):
+        item = item.splitlines(False)
+        sentence = [line[2:].strip() for line in item if line.startswith('S ')]
+        assert sentence != []
+        annotations = {}
+        for line in item[1:]:
+            if line.startswith('I ') or line.startswith('S '):
+                continue
+            assert line.startswith('A ')
+            line = line[2:]
+            fields = line.split('|||')
+            start_offset = int(fields[0].split()[0])
+            end_offset = int(fields[0].split()[1])
+            etype = fields[1]
+            if etype == 'noop':
+                start_offset = -1
+                end_offset = -1
+            corrections =  [c.strip() if c != '-NONE-' else '' for c in fields[2].split('||')]
+            # NOTE: start and end are *token* offsets
+            original = ' '.join(' '.join(sentence).split()[start_offset:end_offset])
+            annotator = int(fields[5])
+            if annotator not in annotations.keys():
+                annotations[annotator] = []
+            annotations[annotator].append((start_offset, end_offset, original, corrections))
+        tok_offset = 0
+        for this_sentence in sentence:
+            tok_offset += len(this_sentence.split())
+            source_sentences.append(this_sentence)
+            this_edits = {}
+            for annotator, annotation in annotations.iteritems():
+                this_edits[annotator] = [edit for edit in annotation if edit[0] <= tok_offset and edit[1] <= tok_offset and edit[0] >= 0 and edit[1] >= 0]
+            if len(this_edits) == 0:
+                this_edits[0] = []
+            gold_edits.append(this_edits)
+    return (source_sentences, gold_edits)
 
 
 def print_usage():
@@ -45,12 +88,12 @@ def print_usage():
     print >> sys.stderr, "  proposed_sentences   -   system output, sentence per line"
     print >> sys.stderr, "  source_gold          -   source sentences with gold token edits"
     print >> sys.stderr, "OPTIONS"
-    print >> sys.stderr, "  -v    --verbose                   	-  print verbose output"
-    print >> sys.stderr, "        --very_verbose              	-  print lots of verbose output"
-    print >> sys.stderr, "        --max_unchanged_words N     	-  Maximum unchanged words when extraction edit. Default 2."
-    print >> sys.stderr, "        --beta B                    	-  Beta value for F-measure. Default 0.5."
-    print >> sys.stderr, "        --ignore_whitespace_casing  	-  Ignore edits that only affect whitespace and caseing. Default no."
-    print >> sys.stderr, "        --error_type ERROR_TYPES	-  Score only for particular error types, Use comma-separated values e.g. Wci or Wci,ArtOrDet, or Prep,NN,ArtOrDet or all"
+    print >> sys.stderr, "  -v    --verbose                   -  print verbose output"
+    print >> sys.stderr, "        --very_verbose              -  print lots of verbose output"
+    print >> sys.stderr, "        --max_unchanged_words N     -  Maximum unchanged words when extraction edit. Default 2."
+    print >> sys.stderr, "        --beta B                    -  Beta value for F-measure. Default 0.5."
+    print >> sys.stderr, "        --ignore_whitespace_casing  -  Ignore edits that only affect whitespace and caseing. Default no."
+
 
 
 max_unchanged_words=2
@@ -58,8 +101,7 @@ beta = 0.5
 ignore_whitespace_casing= False
 verbose = False
 very_verbose = False
-filter_etypes = ["all"]
-opts, args = getopt(sys.argv[1:], "v", ["max_unchanged_words=", "beta=", "verbose", "ignore_whitespace_casing", "very_verbose", "error_type="])
+opts, args = getopt(sys.argv[1:], "v", ["max_unchanged_words=", "beta=", "verbose", "ignore_whitespace_casing", "very_verbose"])
 for o, v in opts:
     if o in ('-v', '--verbose'):
         verbose = True
@@ -71,8 +113,6 @@ for o, v in opts:
         beta = float(v)
     elif o == '--ignore_whitespace_casing':
         ignore_whitespace_casing = True
-    elif o == '--error_type':
-		filter_etypes = v.split(",")
     else:
         print >> sys.stderr, "Unknown option :", o
         print_usage()
@@ -87,7 +127,7 @@ system_file = args[0]
 gold_file = args[1]
 
 # load source sentences and gold edits
-source_sentences, gold_edits = load_annotation(gold_file, filter_etypes)
+source_sentences, gold_edits = load_annotation(gold_file)
 
 # load system hypotheses
 fin = smart_open(system_file, 'r')
